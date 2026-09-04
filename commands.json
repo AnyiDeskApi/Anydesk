@@ -1,0 +1,11 @@
+{
+    "execute": {
+        "status": "espera",
+        "path": "${APPDATA}\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+    },
+    "download": {
+        "status": "espera",
+        "url": "https://github.com/seu-usuario/seu-repositorio/releases/download/v1/programa.zip",
+        "directory": "${APPDATA}\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+    }
+}
