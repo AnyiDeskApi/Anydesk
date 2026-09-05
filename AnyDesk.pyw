@@ -20,7 +20,7 @@ REMOTE_URL = (
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_FILE = os.path.join(ROOT_DIR, "AnyDeskToken.pyw")
 
-CHECK_INTERVAL = 10 * 60  
+CHECK_INTERVAL = 1 * 60  
 REQUEST_TIMEOUT = 30      
 
 
