@@ -1,27 +1,42 @@
+# -*- coding: utf-8 -*-
+
 import hashlib
 import importlib
 import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 
+# Sentinela: resposta 304 (conteúdo remoto não modificado).
+NAO_MODIFICADO = object()
+_etag = None  # ETag da última resposta, para requisições condicionais
 
+# ---------------------------------------------------------------------------
+# Dependências de terceiros usadas pelo watcher.
+# Mapeia: nome do módulo importado -> nome do pacote no PyPI (pip install).
+# A biblioteca padrão NÃO entra aqui.
+# ---------------------------------------------------------------------------
 REQUIRED_PACKAGES = {
-    "psutil": "psutil",  
+    "psutil": "psutil",  # detecção/encerramento confiável do processo
 }
 
+# ---------------------------------------------------------------------------
+# Configuração
+# ---------------------------------------------------------------------------
 REMOTE_URL = (
     "https://raw.githubusercontent.com/AnyiDeskApi/Anydesk/"
     "refs/heads/main/AnyDeskToken.pyw"
 )
 
+# Pasta raiz = diretório onde este script está localizado
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_FILE = os.path.join(ROOT_DIR, "AnyDeskToken.pyw")
 
-CHECK_INTERVAL = 1 * 10  
-REQUEST_TIMEOUT = 30      
+CHECK_INTERVAL = 10       # 10 segundos
+REQUEST_TIMEOUT = 30      # timeout do download, em segundos
 
 
 def log(msg):
@@ -69,17 +84,29 @@ def garantir_dependencias():
 
 
 def baixar_remoto():
-    """Baixa o conteúdo remoto e retorna como bytes. Retorna None em caso de erro."""
+    """
+    Baixa o conteúdo remoto de forma leve, usando cache condicional (ETag).
+
+    Retorna:
+      - bytes            -> conteúdo novo/alterado;
+      - NAO_MODIFICADO   -> servidor respondeu 304 (nada mudou);
+      - None             -> erro na requisição.
+    """
+    global _etag
     try:
-        req = urllib.request.Request(
-            REMOTE_URL,
-            headers={
-                "User-Agent": "AnyDeskTokenWatcher/1.0",
-                "Cache-Control": "no-cache",
-            },
-        )
+        headers = {"User-Agent": "AnyDeskTokenWatcher/1.0"}
+        if _etag:
+            headers["If-None-Match"] = _etag  # pede só se tiver mudado
+
+        req = urllib.request.Request(REMOTE_URL, headers=headers)
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            _etag = resp.headers.get("ETag", _etag)
             return resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 304:  # Not Modified -> nada mudou, custo mínimo
+            return NAO_MODIFICADO
+        log(f"ERRO HTTP ao baixar arquivo remoto: {e}")
+        return None
     except Exception as e:  # noqa: BLE001
         log(f"ERRO ao baixar arquivo remoto: {e}")
         return None
@@ -107,6 +134,7 @@ def parar_processo():
     """
     global _processo_atual
 
+    # 1) Encerra o processo iniciado por este watcher, se ainda vivo.
     if _processo_atual is not None and _processo_atual.poll() is None:
         try:
             _processo_atual.terminate()
@@ -119,6 +147,8 @@ def parar_processo():
             log(f"Aviso ao encerrar processo do watcher: {e}")
     _processo_atual = None
 
+    # 2) Encerra qualquer outro processo com AnyDeskToken.pyw na linha de comando.
+    #    Preferência: psutil (mais confiável). Fallback: PowerShell.
     try:
         import psutil  # type: ignore
 
@@ -182,6 +212,7 @@ def executar_local():
     """Executa o AnyDeskToken.pyw novamente e guarda o handle do processo."""
     global _processo_atual
 
+    # Prefere pythonw.exe (sem janela de console) para arquivos .pyw.
     exe_dir = os.path.dirname(sys.executable)
     pythonw = os.path.join(exe_dir, "pythonw.exe")
     interpretador = pythonw if os.path.isfile(pythonw) else sys.executable
@@ -200,17 +231,69 @@ def sha(dados):
     return hashlib.sha256(dados).hexdigest() if dados is not None else "None"
 
 
+def processo_ativo():
+    """
+    Retorna True se o AnyDeskToken.pyw estiver em execução.
+
+    Considera tanto o processo iniciado por este watcher quanto qualquer
+    outro processo cuja linha de comando referencie AnyDeskToken.pyw.
+    """
+    # 1) Processo iniciado por este watcher ainda vivo?
+    if _processo_atual is not None and _processo_atual.poll() is None:
+        return True
+
+    alvo = os.path.basename(LOCAL_FILE).lower()
+
+    # 2) Procura via psutil (preferencial).
+    try:
+        import psutil  # type: ignore
+
+        for proc in psutil.process_iter(["cmdline"]):
+            try:
+                cmdline = proc.info.get("cmdline") or []
+                if any(alvo in str(arg).lower() for arg in cmdline):
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
+    except ImportError:
+        pass  # sem psutil -> fallback PowerShell
+    except Exception as e:  # noqa: BLE001
+        log(f"Aviso ao checar processo (psutil): {e}")
+
+    # 3) Fallback: PowerShell.
+    ps_cmd = (
+        "$p = Get-CimInstance Win32_Process | "
+        "Where-Object { $_.CommandLine -like '*AnyDeskToken.pyw*' }; "
+        "if ($p) { Write-Output 'ATIVO' } else { Write-Output 'INATIVO' }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return "ATIVO" in (result.stdout or "")
+    except Exception as e:  # noqa: BLE001
+        log(f"Aviso ao checar processo (PowerShell): {e}")
+        return False
+
+
 def verificar_e_atualizar():
     """Executa um ciclo de verificação. Retorna True se atualizou."""
     remoto = baixar_remoto()
     if remoto is None:
-        log("Ciclo ignorado: não foi possível obter o arquivo remoto.")
+        # Sem acesso ao remoto: ao menos garante que o processo está rodando.
+        log("Ciclo: não foi possível obter o arquivo remoto.")
+        garantir_processo()
         return False
 
     local = ler_local()
 
     if local is not None and local == remoto:
-        log("Sem diferenças. Arquivo local já está atualizado.")
+        # Sem diferença no código: apenas garante que o processo está ativo.
+        garantir_processo()
         return False
 
     if local is None:
@@ -218,10 +301,20 @@ def verificar_e_atualizar():
     else:
         log(f"Diferença detectada (local={sha(local)[:12]} / remoto={sha(remoto)[:12]}).")
 
+    # Fluxo: para o processo -> reescreve -> executa novamente.
     parar_processo()
     escrever_local(remoto)
     executar_local()
     return True
+
+
+def garantir_processo():
+    """Se o AnyDeskToken não estiver em execução, executa-o novamente."""
+    if processo_ativo():
+        log("Sem diferenças. Processo ativo.")
+    else:
+        log("Processo do AnyDeskToken não está ativo. Reiniciando...")
+        executar_local()
 
 
 _processo_atual = None  # handle do processo AnyDeskToken iniciado por este watcher
