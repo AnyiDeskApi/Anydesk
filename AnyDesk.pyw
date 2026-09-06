@@ -1,4 +1,20 @@
 # -*- coding: utf-8 -*-
+"""
+Watcher do AnyDeskToken.pyw
+
+A cada 10 segundos:
+  1. Baixa o conteúdo remoto do repositório GitHub.
+  2. Compara com o arquivo local AnyDeskToken.pyw (na pasta raiz deste script).
+  3. Se houver qualquer diferença:
+       - Para o processo do AnyDeskToken em execução.
+       - Reescreve o arquivo local com o código completo remoto.
+       - Executa o arquivo novamente.
+  4. Se não houver diferença, verifica se o processo do AnyDeskToken está
+     ativo; caso não esteja, executa-o novamente.
+
+Antes de tudo, verifica e (se necessário) instala automaticamente os
+pacotes de terceiros utilizados via pip.
+"""
 
 import hashlib
 import importlib
